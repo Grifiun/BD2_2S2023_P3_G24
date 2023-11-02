@@ -1,0 +1,105 @@
+from flask import Flask, request, jsonify
+import pymongo
+import csv
+
+app = Flask(__name__)
+
+client = pymongo.MongoClient("mongodb+srv://quixtan:patinaje@cluster0.utqhr8t.mongodb.net/")
+db = client["Bases2"]
+
+@app.route("/carga", methods=["GET"])
+def cargar_datos_desde_csv():
+    try:
+        # Carga de datos desde el archivo CSV
+        with open("Libros.csv", 'r', encoding='utf-8') as archivo:
+            datos_csv = csv.DictReader(archivo)
+            nombre_coleccion = "Libros"  # Nombre de la colección en MongoDB
+
+            for fila in datos_csv:
+                # Convierte el campo "Precio" a un valor numérico
+                fila["Precio"] = float(fila["Precio"])
+                db[nombre_coleccion].insert_one(fila)
+
+        return jsonify({"message": f"Datos cargados en la colección '{nombre_coleccion}' con éxito."})
+    except Exception as e:
+        return jsonify({"error": f"Error al cargar datos en la colección '{nombre_coleccion}': {str(e)}"}, 500)
+
+# Listar todos los libros disponibles
+@app.route("/libros", methods=["GET"])
+def listar_libros():
+    libros = list(db["Libros"].find({}, {"_id": 0}))
+    return jsonify(libros)
+
+# Encontrar libros por Categoría
+@app.route("/libros/categoria/<categoria>", methods=["GET"])
+def buscar_libros_por_categoria(categoria):
+    libros = list(db["Libros"].find({"Categoria": categoria}, {"_id": 0}))
+    return jsonify(libros)
+
+# Buscar libros con un autor específico
+@app.route("/libros/autor/<autor>", methods=["GET"])
+def buscar_libros_por_autor(autor):
+    libros = list(db["Libros"].find({"Autor": autor}, {"_id": 0}))
+    return jsonify(libros)
+
+# Mostrar los libros ordenados por calificación promedio (de mayor a menor)
+@app.route("/libros/calificacion", methods=["GET"])
+def libros_por_calificacion():
+    libros = list(db["Libros"].find({}, {"_id": 0}).sort([("Calificacion", pymongo.DESCENDING)]))
+    return jsonify(libros)
+
+# Encontrar libros con un precio inferior a 20
+@app.route("/libros/precio-inferior", methods=["GET"])
+def buscar_libros_precio_inferior():
+    libros = list(db["Libros"].find({"Precio": {"$lt": 20}}, {"_id": 0}))
+    return jsonify(libros)
+
+# Buscar libros con una palabra clave en el título o descripción
+@app.route("/libros/buscar/<clave>", methods=["GET"])
+def buscar_libros_por_palabra_clave(clave):
+    libros = list(db["Libros"].find({"$or": [{"Titulo": {"$regex": clave, "$options": 'i'}}, {"Descripcion": {"$regex": clave, "$options": 'i'}}]}, {"_id": 0}))
+    return jsonify(libros)
+
+# Información de los 10 autores más caros (Suma del precio de todos sus libros)
+@app.route("/autores", methods=["GET"])
+def autores_mas_caros():
+    pipeline = [
+        {"$group": {"_id": "$Autor", "TotalPrecio": {"$sum": "$Precio"}}},
+        {"$sort": {"TotalPrecio": pymongo.DESCENDING}},
+        {"$limit": 10}
+    ]
+    autores = list(db["Libros"].aggregate(pipeline))
+    return jsonify(autores)
+
+# Obtener la cantidad de libros en stock para un libro específico
+@app.route("/libros/stock/<titulo>", methods=["GET"])
+def cantidad_libros_stock(titulo):
+    libro = db["Libros"].find_one({"Titulo": titulo})
+    if libro:
+        stock = libro["Stock"]
+        return jsonify({"Stock": stock})
+    else:
+        return jsonify({"message": "Libro no encontrado"}, 404)
+
+# Calcular el precio promedio de todos los libros
+@app.route("/libros/precio-promedio", methods=["GET"])
+def precio_promedio_libros():
+    pipeline = [
+        {"$group": {"_id": None, "PrecioPromedio": {"$avg": "$Precio"}}}
+    ]
+    resultado = list(db["Libros"].aggregate(pipeline))
+
+    if resultado and resultado[0]["PrecioPromedio"] is not None:
+        precio_promedio = resultado[0]["PrecioPromedio"]
+        return jsonify({"PrecioPromedio": precio_promedio})
+    else:
+        return jsonify({"PrecioPromedio": 0})  # Otra respuesta si no se encontraron libros en la colección
+
+# Información de todas las categorías
+@app.route("/categorias", methods=["GET"])
+def todas_las_categorias():
+    categorias = list(db["Libros"].distinct("Categoria"))
+    return jsonify(categorias)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=3000)
